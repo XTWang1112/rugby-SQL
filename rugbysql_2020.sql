@@ -269,3 +269,197 @@ UNLOCK TABLES;
 -- Just in case commit all changes 
 COMMIT;
 -- 
+
+-- Q1
+SELECT EverPlayed.FirstName, EverPlayed.LastName, WithClub.ClubName
+FROM
+	(SELECT DISTINCT player.FirstName, player.LastName
+	 FROM player
+	 NATURAL JOIN playerteam) EverPlayed
+	LEFT JOIN
+    (SELECT player.FirstName, player.LastName, FromDate, ToDate, ClubID, ClubName
+	 FROM player
+	 NATURAL JOIN clubplayer
+	 NATURAL JOIN Club
+	 WHERE ToDate IS NULL) WithClub
+	ON EverPlayed.FirstName = WithClub.FirstName AND EverPlayed.LastName = WithClub.LastName
+ORDER BY EverPlayed.LastName ASC, EverPlayed.FirstName ASC;
+
+-- Q2
+SELECT CONCAT(player.FirstName, ' ', player.LastName) AS player_name
+FROM player 
+NATURAL JOIN playerteam
+WHERE Sex = 'F'
+GROUP BY player.PlayerID
+HAVING COUNT(DISTINCT TeamID) > 1;
+
+-- Q3
+SELECT CONCAT(FirstName, ' ', LastName) AS player_name
+FROM player
+WHERE playerID NOT IN(
+						SELECT PlayerID
+						FROM playerteam
+                        NATURAL JOIN game
+                        NATURAL JOIN season
+                        NATURAL JOIN competition
+                        WHERE CompetitionType = 'Mixed'
+                        );
+
+-- Q4
+SELECT SeasonYear, COUNT(*)
+FROM season 
+NATURAL JOIN game
+WHERE T1Score IS NULL and T2Score IS NULL
+GROUP BY SeasonYear
+HAVING COUNT(*) = (
+					SELECT MAX(CancelledGames)
+					FROM (	 SELECT SeasonYear, COUNT(*) as CancelledGames
+							 FROM game NATURAL JOIN season
+							 WHERE T1Score IS NULL and T2Score IS NULL
+							 GROUP BY SeasonYear) cancelledgames
+					);
+                    
+-- Q5
+SELECT NumberOfF.ClubName, F, M, ABS(F-M) AS AbsDifference
+FROM
+	(SELECT ClubName,COUNT(PlayerID) AS F
+	 FROM club NATURAL JOIN clubplayer NATURAL JOIN player
+	 WHERE SEX = 'F' AND ToDate IS NULL
+	 GROUP BY ClubName) AS NumberOfF
+	INNER JOIN
+	(SELECT CLubName,COUNT(PlayerID) AS M
+	 FROM club NATURAL JOIN clubplayer NATURAL JOIN player
+	 WHERE SEX = 'M' AND ToDate IS NULL
+	 GROUP BY ClubName) AS NumberOfM
+	ON NumberOfF.ClubName = NumberOfM.ClubName
+WHERE F <> M
+ORDER BY AbsDifference DESC;
+
+-- Q6
+SELECT game2017.FirstName, game2017.SEX, Count2017, IFNULL(Count2018, 0) AS Count2018
+FROM
+	(SELECT FirstName, playerID, SEX, COUNT(gameID) AS Count2017
+	 FROM player 
+	 NATURAL JOIN playerteam
+	 NATURAL JOIN game
+	 WHERE YEAR(MatchDate) = 2017
+	 GROUP BY player.PlayerID) AS game2017
+	LEFT JOIN
+	(SELECT FirstName, SEX, playerID, COUNT(gameID) AS Count2018
+	 FROM player 
+	 NATURAL JOIN playerteam
+	 NATURAL JOIN game
+	 WHERE YEAR(MatchDate) = 2018
+	 GROUP BY player.PlayerID) AS game2018
+	ON game2017.playerID = game2018.playerID
+WHERE Count2017 > Count2018 OR (Count2017 > 0 AND Count2018 IS NULL);
+
+-- Q7
+SELECT teamName, ScoreTotal
+FROM
+	(SELECT teamName, SUM(T1ScoreTotal) AS ScoreTotal
+	 FROM
+		(SELECT teamName, gameID, SUM(T1Score) AS T1ScoreTotal
+		 FROM team
+		 INNER JOIN game
+		 ON team.TeamID = game.Team1
+		 NATURAL JOIN season NATURAL JOIN competition
+		 WHERE SeasonYear = 2017 AND CompetitionName = 'Bingham Trophy'
+		 GROUP BY teamName
+		 UNION
+		 SELECT teamName, gameID, SUM(T2Score) AS T2SoreTotal
+		 FROM team
+		 INNER JOIN game
+		 ON team.TeamID = game.Team2
+		 NATURAL JOIN season NATURAL JOIN competition
+		 WHERE SeasonYear = 2017 and CompetitionName = 'Bingham Trophy'
+		 GROUP BY teamName) AS teamTotal
+	 GROUP BY teamName) Total
+WHERE ScoreTotal > 100
+ORDER BY ScoreTotal DESC;
+
+-- Q8
+UPDATE clubplayer
+SET ToDate = '2020-04-30'
+WHERE ToDate IS NULL;
+SELECT DISTINCT CONCAT(player.FirstName, ' ', player.LastName) AS PlayerName, clubplayer.FromDate, clubplayer.ToDate, DATEDIFF(clubplayer.ToDate, clubplayer.FromDate) AS ServeLength
+FROM player
+NATURAL JOIN clubplayer
+NATURAL JOIN club
+WHERE club.ClubName = 'Melbourne City'
+ORDER BY ServeLength
+LIMIT 1;
+UPDATE clubplayer
+SET ToDate = NULL
+WHERE ToDate = '2020-04-30';
+
+-- Q9
+SELECT DISTINCT MatchGame.FirstName, MatchGame.LastName, COUNT(MatchGame.gameID) AS ForeignMatchCount
+FROM
+	(SELECT *
+	 FROM player
+	 NATURAL JOIN playerteam
+	 NATURAL JOIN game
+	 NATURAL JOIN team
+	 NATURAL JOIN club) AS MatchGame
+	INNER JOIN
+	(SELECT *
+	 FROM player
+	 NATURAL JOIN clubplayer
+	 NATURAL JOIN club) AS ClubIN
+	ON matchGame.FirstName = ClubIN.FirstName AND matchGame.LastName = ClubIn.LastName
+WHERE MatchGame.ClubName <> ClubIN.ClubName AND ((MatchGame.MatchDate > FromDate AND MatchGame.MatchDate < ClubIN.ToDate) OR (MatchGame.MatchDate > FromDate AND ClubIN.ToDate IS NULL))
+GROUP BY MatchGame.PlayerID
+ORDER BY ForeignMatchCount DESC
+LIMIT 20;
+
+-- 10
+SELECT TeamName, maxNumberOfWalkovers, SeasonYear 
+FROM Team 
+NATURAL JOIN (
+				SELECT maxyearlyteamwalkovers.teamID, maxyearlyteamwalkovers.maxNumberOfWalkovers,teamwalkoversperyear.SeasonYear 
+				FROM (
+						SELECT TeamID, COUNT(*) AS numberOfWalkovers, SeasonYear
+						FROM (
+								SELECT TeamID AS teamID, T1Score AS teamscore, T2Score AS opponentscore, SeasonYear
+								FROM game 
+                                NATURAL JOIN season
+								INNER JOIN team 
+                                ON game.Team1 = team.TeamID
+								UNION ALL -- or UNION
+								SELECT TeamID AS teamID, T2Score AS teamscore,T1Score AS opponentscore, SeasonYear
+								FROM game 
+                                NATURAL JOIN season
+								INNER JOIN team 
+                                ON game.Team2 = team.TeamID
+							) AS teamgamescores
+						WHERE teamscore = 0 AND opponentscore = 28
+						GROUP BY teamID, SeasonYear
+						HAVING COUNT(*) > 1 
+				) AS teamwalkoversperyear 
+                INNER JOIN (
+							SELECT teamID, MAX(numberOfWalkovers) AS maxNumberOfWalkovers
+							FROM (
+									SELECT teamID, COUNT(*) as numberOfWalkovers, SeasonYear
+									FROM (
+											SELECT  TeamID as teamID, T1Score AS teamscore, T2Score AS opponentscore, SeasonYear
+											FROM game 
+                                            NATURAL JOIN season
+											INNER JOIN team 
+                                            ON game.Team1 = team.TeamID
+											UNION ALL 
+											SELECT TeamID as teamID, T2Score AS teamscore, T1Score AS opponentscore, SeasonYear
+											FROM game 
+                                            NATURAL JOIN season
+											INNER JOIN team 
+                                            ON game.Team2 = team.TeamID
+								) AS teamgamescores
+							WHERE teamscore = 0 AND opponentscore = 28
+							GROUP BY teamID, SeasonYear
+							HAVING COUNT(*) > 1 
+							) AS teamwalkoversperyear
+				GROUP BY teamID
+			) AS maxyearlyteamwalkovers 
+ON maxyearlyteamwalkovers.teamID = teamwalkoversperyear.teamID AND teamwalkoversperyear.numberOfWalkovers = maxyearlyteamwalkovers.maxNumberOfWalkovers
+) AS maxteamwalkoversperyear;
+
